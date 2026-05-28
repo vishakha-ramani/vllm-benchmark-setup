@@ -1,0 +1,61 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {name}
+  namespace: {namespace}
+  labels:
+    experiment: vllm-sweep
+spec:
+  template:
+    spec:
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: {app_label}
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: {name}
+          image: ghcr.io/vllm-project/guidellm:latest
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              mkdir -p "$GUIDELLM_OUTPUT_DIR"
+              guidellm benchmark run \
+                --target "$GUIDELLM_TARGET" \
+                --profile "$GUIDELLM_PROFILE" \
+                --max-seconds "$GUIDELLM_MAX_SECONDS" \
+                --data "$GUIDELLM_DATA" \
+                --output-dir "$GUIDELLM_OUTPUT_DIR" \
+                --outputs "$GUIDELLM_OUTPUTS"
+          env:
+            - name: HF_HOME
+              value: "/tmp"
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token-secret
+                  key: token
+            - name: GUIDELLM_TARGET
+              value: "{vllm_service}"
+            - name: GUIDELLM_PROFILE
+              value: "sweep"
+            - name: GUIDELLM_MAX_SECONDS
+              value: "{max_seconds}"
+            - name: GUIDELLM_DATA
+              value: "prompt_tokens={input_tokens},prompt_tokens_min={input_min},prompt_tokens_max={input_max},output_tokens={output_tokens},output_tokens_min={output_min},output_tokens_max={output_max},samples={samples},random_seed={seed}"
+            - name: GUIDELLM_OUTPUT_DIR
+              value: "/results/{output_file}"
+            - name: GUIDELLM_OUTPUTS
+              value: "csv,json,html"
+          volumeMounts:
+            - name: results-volume
+              mountPath: "/results"
+      restartPolicy: Never
+      volumes:
+        - name: results-volume
+          persistentVolumeClaim:
+            claimName: guidellm-results-pvc
+  backoffLimit: 4

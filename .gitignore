@@ -1,0 +1,17 @@
+# generated manifests + benchmark output
+generated/
+results/
+
+# secrets — never commit a filled-in token
+cluster/03-hf-secret.yaml
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# editor / OS
+.DS_Store
+.idea/
+.vscode/
