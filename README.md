@@ -111,18 +111,83 @@ make clean-generated                       # remove generated/ locally
 
 ## Token sampling
 
-`generate_manifests.py` configures guidellm with symmetric ±50% bounds
-around the requested average:
+We want prompt and output lengths to be **uniformly distributed** across
+the configured range — not clustered around the mean — so each cell of
+the input/output grid covers its space evenly.
+
+### How guidellm samples
+
+guidellm's synthetic dataset (`SyntheticTextItemsGenerator` in
+`dataset/synthetic.py`) initializes both `prompt_tokens_sampler` and
+`output_tokens_sampler` with `IntegerRangeSampler`:
+
+```python
+class IntegerRangeSampler:
+    def __init__(self, average, variance, min_value, max_value, random_seed):
+        self.average = average
+        self.variance = variance
+        self.min_value = min_value
+        self.max_value = max_value
+        self.rng = random.Random(random_seed)
+
+    def __iter__(self):
+        calc_min = self.min_value
+        if calc_min is None:
+            calc_min = max(
+                1, self.average - 5 * self.variance if self.variance else self.average
+            )
+        calc_max = self.max_value
+        if calc_max is None:
+            calc_max = (
+                self.average + 5 * self.variance if self.variance else self.average
+            )
+
+        while True:
+            if calc_min == calc_max:
+                yield calc_min
+            elif not self.variance:
+                yield self.rng.randint(calc_min, calc_max)         # uniform
+            else:
+                rand = self.rng.gauss(self.average, self.variance) # gaussian
+                yield round(max(calc_min, min(calc_max, rand)))
+```
+
+The `variance` argument (i.e. `prompt_tokens_stdev` / `output_tokens_stdev`
+in the guidellm data string) is what selects the distribution:
+
+- **`variance` set** → `rng.gauss(average, variance)` — Gaussian, then
+  clipped to `[min_value, max_value]`.
+- **`variance` None or 0** → `rng.randint(calc_min, calc_max)` — uniform.
+
+`generate_manifests.py` deliberately omits `prompt_tokens_stdev` /
+`output_tokens_stdev`, so the sampler takes the uniform branch.
+
+### Choosing min/max for a uniform target
+
+For a uniform distribution the mean is the midpoint:
+
+$$\mu = \frac{\text{min} + \text{max}}{2} \quad\Longrightarrow\quad \text{min} + \text{max} = 2\mu$$
+
+So for an average of 64 tokens, any pair of bounds summing to 128 will
+center the distribution there. The pair you pick determines how much
+variability you get:
+
+| Variability | Min | Max | Range (Max − Min + 1) |
+| --- | --- | --- | --- |
+| Low    | 60 | 68 | 9 tokens  |
+| Medium | 48 | 80 | 33 tokens |
+| High   | 32 | 96 | 65 tokens |
+
+We pick **high variability** to cover the input/output space rather than
+hover near the mean. `generate_manifests.py` implements this with
+symmetric ±50% bounds around the requested average:
 
 ```
 input_min  = avg // 2
 input_max  = avg * 1.5    # same for output
 ```
 
-guidellm's `IntegerRangeSampler` falls back to a uniform distribution
-when no `*_stdev` is supplied, so the prompt and output lengths are
-sampled uniformly within `[min, max]` — useful when you want to cover
-the input/output space evenly rather than concentrate around the mean.
+For `avg = 64`, that yields `[32, 96]` — matching the "High" row above.
 
 ## Customizing
 
